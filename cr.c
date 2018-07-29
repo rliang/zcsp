@@ -48,8 +48,10 @@ static void zcr_wrapper()
 	void (*free_cr)(struct zcr *) = spawn_queue.next->free_cr;
 	void (*free_stk)(void *) = spawn_queue.next->free_stk;
 	spawn_queue.next->proc(spawn_queue.next->ap);
-	free_stk(current->ctx.uc_stack.ss_sp);
-	free_cr(current);
+	if (free_stk != NULL)
+		free_stk(current->ctx.uc_stack.ss_sp);
+	if (free_cr != NULL)
+		free_cr(current);
 	current = NULL;
 }
 

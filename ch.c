@@ -9,29 +9,30 @@
 #include "cr.h"
 
 static struct {
-	struct r_queue {
-		struct r_queue *next, *prev;
-		struct zcr *co;
+	struct recv_queue {
+		struct recv_queue *next, *prev;
+		struct zcr *cr;
 		int *ret;
-	} r_queue;
+	} recv_queue;
 	void *value;
 } * channels;
 
-static struct w_queue {
-	struct w_queue *next, *prev;
-	struct zcr *co;
+static struct send_queue {
+	struct send_queue *next, *prev;
+	struct zcr *cr;
 	int id;
 	void *value;
-} w_queue;
+} send_queue;
 
-static struct t_queue {
-	struct t_queue *parent, *left, *next;
-	struct zcr *co;
+static struct time_queue {
+	struct time_queue *parent, *left, *next;
+	struct zcr *cr;
 	int *ret;
 	int deadline;
-} * t_queue = NULL;
+} *time_queue = NULL;
 
-static struct t_queue *t_queue_merge(struct t_queue *t1, struct t_queue *t2)
+static struct time_queue *time_queue_merge(struct time_queue *t1,
+					   struct time_queue *t2)
 {
 	if (t1 == NULL)
 		return t2;
@@ -50,16 +51,17 @@ static struct t_queue *t_queue_merge(struct t_queue *t1, struct t_queue *t2)
 	}
 }
 
-static struct t_queue *t_queue_pop(struct t_queue *t)
+static struct time_queue *time_queue_pop(struct time_queue *t)
 {
 	if (t == NULL || t->next == NULL)
 		return t;
-	struct t_queue *a = t->next, *b = t->next->next;
+	struct time_queue *a = t->next, *b = t->next->next;
 	t->next = (t->next->next = NULL);
-	return t_queue_merge(t_queue_merge(t, a), t_queue_pop(b));
+	return time_queue_merge(time_queue_merge(t, a), time_queue_pop(b));
 }
 
-static struct t_queue *t_queue_remove(struct t_queue *root, struct t_queue *t)
+static struct time_queue *time_queue_remove(struct time_queue *root,
+					    struct time_queue *t)
 {
 	assert(root != NULL);
 	assert(t != NULL);
@@ -70,9 +72,9 @@ static struct t_queue *t_queue_remove(struct t_queue *root, struct t_queue *t)
 		else
 			t->parent->next = NULL;
 		t->parent = NULL;
-		t = t_queue_merge(root, t);
+		t = time_queue_merge(root, t);
 	}
-	return t_queue_pop(t->left);
+	return time_queue_pop(t->left);
 }
 
 size_t zch_mem()
@@ -88,11 +90,6 @@ void zch_init_full(void *mem)
 void zch_init(int nids)
 {
 	zch_init_full(calloc(nids, zch_mem()));
-}
-
-void zch_free_full(void (*free)(void *))
-{
-	free(channels);
 }
 
 void zch_free()
@@ -111,33 +108,33 @@ int zch_choose(int deadline, int nids, ...)
 	va_list ap;
 	va_start(ap, nids);
 	int ret;
-	struct t_queue t = {.parent = NULL,
-			    .left = NULL,
-			    .next = NULL,
-			    .co = zcr_current(),
-			    .ret = &ret,
-			    .deadline = deadline};
-	t_queue = t_queue_merge(t_queue, &t);
-	struct r_queue r[nids];
+	struct time_queue t = {.parent = NULL,
+			       .left = NULL,
+			       .next = NULL,
+			       .cr = zcr_current(),
+			       .ret = &ret,
+			       .deadline = deadline};
+	time_queue = time_queue_merge(time_queue, &t);
+	struct recv_queue r[nids];
 	for (int i = 0; i < nids; i++) {
-		r[i].co = zcr_current();
+		r[i].cr = zcr_current();
 		r[i].ret = &ret;
-		insque(&r[i], &channels[va_arg(ap, int)].r_queue);
+		insque(&r[i], &channels[va_arg(ap, int)].recv_queue);
 	}
 	va_end(ap);
 	zcr_suspend_current();
 	for (int i = 0; i < nids; i++)
 		remque(&r[i]);
 	if (ret != -1)
-		t_queue = t_queue_remove(t_queue, &t);
+		time_queue = time_queue_remove(time_queue, &t);
 	return ret;
 }
 
 void zch_put(int id, void *data)
 {
 	struct zcr *t = zcr_current();
-	struct w_queue w = {.co = t, .id = id, .value = data};
-	insque(&w, &w_queue);
+	struct send_queue w = {.cr = t, .id = id, .value = data};
+	insque(&w, &send_queue);
 	if (t == NULL)
 		zch_put_flush();
 	else
@@ -147,36 +144,36 @@ void zch_put(int id, void *data)
 void zch_put_flush()
 {
 	assert(zcr_current() == NULL);
-	struct w_queue *w = w_queue.next;
+	struct send_queue *w = send_queue.next;
 	while (w != NULL) {
-		struct zcr *t = w->co;
+		struct zcr *t = w->cr;
 		int id = w->id;
 		channels[id].value = w->value;
-		struct r_queue *r = channels[id].r_queue.next;
+		struct recv_queue *r = channels[id].recv_queue.next;
 		while (r != NULL) {
-			struct r_queue *next = r->next;
+			struct recv_queue *next = r->next;
 			*r->ret = id;
-			zcr_resume(r->co);
+			zcr_resume(r->cr);
 			r = next;
 		}
 		remque(w);
 		if (t != NULL)
 			zcr_resume(t);
-		w = w_queue.next;
+		w = send_queue.next;
 	}
 }
 
 int zch_deadline()
 {
-	return t_queue == NULL ? -1 : t_queue->deadline;
+	return time_queue == NULL ? -1 : time_queue->deadline;
 }
 
 void zch_deadline_pop()
 {
 	assert(zcr_current() == NULL);
-	assert(t_queue != NULL);
-	struct zcr *c = t_queue->co;
-	*t_queue->ret = -1;
-	t_queue = t_queue_pop(t_queue->left);
+	assert(time_queue != NULL);
+	struct zcr *c = time_queue->cr;
+	*time_queue->ret = -1;
+	time_queue = time_queue_pop(time_queue->left);
 	zcr_resume(c);
 }

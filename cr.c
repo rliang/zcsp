@@ -27,7 +27,7 @@ static struct spawn_queue {
 	struct zcr *parent, *child;
 	void (*proc)(va_list);
 	va_list ap;
-	void (*free_co)(struct zcr *);
+	void (*free_cr)(struct zcr *);
 	void (*free_stk)(void *);
 } spawn_queue = {NULL};
 
@@ -45,17 +45,17 @@ static void zcr_wrapper()
 {
 	assert(spawn_queue.next != NULL);
 	assert(current == spawn_queue.next->child);
-	void (*free_co)(struct zcr *) = spawn_queue.next->free_co;
+	void (*free_cr)(struct zcr *) = spawn_queue.next->free_cr;
 	void (*free_stk)(void *) = spawn_queue.next->free_stk;
 	spawn_queue.next->proc(spawn_queue.next->ap);
 	free_stk(current->ctx.uc_stack.ss_sp);
-	free_co(current);
+	free_cr(current);
 	current = NULL;
 }
 
-static void zcr_default_free(struct zcr *co)
+static void zcr_default_free(struct zcr *cr)
 {
-	free(co);
+	free(cr);
 }
 
 static void zcr_default_free_stk(void *stk)
@@ -63,24 +63,25 @@ static void zcr_default_free_stk(void *stk)
 	munmap(stk, 0);
 }
 
-static void zcr_spawn_va(struct zcr *co, void *stk, size_t stk_size,
-			void (*free_co)(struct zcr *), void (*free_stk)(void *),
-			void (*proc)(va_list), va_list ap)
+static void zcr_spawn_va(struct zcr *cr, void *stk, size_t stk_size,
+			 void (*free_cr)(struct zcr *),
+			 void (*free_stk)(void *), void (*proc)(va_list),
+			 va_list ap)
 {
-	getcontext(&co->ctx);
-	co->ctx.uc_link = &main_ctx;
-	co->ctx.uc_stack.ss_size = stk_size;
-	co->ctx.uc_stack.ss_sp = stk;
+	getcontext(&cr->ctx);
+	cr->ctx.uc_link = &main_ctx;
+	cr->ctx.uc_stack.ss_size = stk_size;
+	cr->ctx.uc_stack.ss_sp = stk;
 #ifdef VALGRIND
-	VALGRIND_STACK_REGISTER(co->ctx.uc_stack.ss_sp,
-				co->ctx.uc_stack.ss_sp
-					+ co->ctx.uc_stack.ss_size);
+	VALGRIND_STACK_REGISTER(cr->ctx.uc_stack.ss_sp,
+				cr->ctx.uc_stack.ss_sp
+					+ cr->ctx.uc_stack.ss_size);
 #endif
-	makecontext(&co->ctx, zcr_wrapper, 0);
+	makecontext(&cr->ctx, zcr_wrapper, 0);
 	struct spawn_queue s = {.parent = current,
-				.child = co,
+				.child = cr,
 				.proc = proc,
-				.free_co = free_co,
+				.free_cr = free_cr,
 				.free_stk = free_stk};
 	va_copy(s.ap, ap);
 	insque(&s, &spawn_queue);
@@ -91,13 +92,13 @@ static void zcr_spawn_va(struct zcr *co, void *stk, size_t stk_size,
 	va_end(s.ap);
 }
 
-void zcr_spawn_full(struct zcr *t, void *stk, size_t stk_size,
-		   void (*free_co)(struct zcr *), void (*free_stk)(void *),
-		   void (*proc)(va_list), ...)
+void zcr_spawn_full(struct zcr *cr, void *stk, size_t stk_size,
+		    void (*free_cr)(struct zcr *), void (*free_stk)(void *),
+		    void (*proc)(va_list), ...)
 {
 	va_list ap;
 	va_start(ap, proc);
-	zcr_spawn_va(t, stk, stk_size, free_co, free_stk, proc, ap);
+	zcr_spawn_va(cr, stk, stk_size, free_cr, free_stk, proc, ap);
 	va_end(ap);
 }
 
@@ -131,14 +132,14 @@ void zcr_spawn_flush()
 void zcr_suspend_current()
 {
 	assert(current != NULL);
-	struct zcr *co = current;
+	struct zcr *cr = current;
 	current = NULL;
-	swapcontext(&co->ctx, &main_ctx);
+	swapcontext(&cr->ctx, &main_ctx);
 }
 
-void zcr_resume(struct zcr *co)
+void zcr_resume(struct zcr *cr)
 {
-	assert(co != NULL);
+	assert(cr != NULL);
 	assert(current == NULL);
-	swapcontext(&main_ctx, &(current = co)->ctx);
+	swapcontext(&main_ctx, &(current = cr)->ctx);
 }

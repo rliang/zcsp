@@ -8,8 +8,6 @@ void zch_init_full(void *mem);
 
 void zch_init(int nids);
 
-void zch_free_full(void (*free)(void *));
-
 void zch_free();
 
 void *zch_data(int id);

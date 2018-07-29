@@ -2,7 +2,7 @@ PREFIX ?= /usr/local
 INCDIR ?= $(PREFIX)/include/zcsp
 LIBDIR ?= $(PREFIX)/lib
 
-CFLAGS ?= -Wall -Wextra
+CFLAGS ?= -Ofast -Wall -Wextra
 CFLAGS += -fPIC -MMD
 
 .PHONY: all install clean
